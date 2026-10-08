@@ -6,6 +6,7 @@
     <Project Path="src/TreeEditor.Infrastructure/TreeEditor.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/TreeEditor.Application.Tests/TreeEditor.Application.Tests.csproj" />
     <Project Path="tests/TreeEditor.IntegrationTests/TreeEditor.IntegrationTests.csproj" />
   </Folder>
 </Solution>

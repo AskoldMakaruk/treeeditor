@@ -13,5 +13,8 @@ public sealed record TreeCheckResult(long Revision, IReadOnlyList<NodeVersionDto
 
 public sealed record RevisionDto(long Revision);
 
-/// <summary>Pushed to connected clients when a client applies changes or resets.</summary>
-public sealed record TreeChangedNotification(long Revision, IReadOnlyList<int> ChangedIds);
+/// <summary>
+/// Pushed to connected clients when a client applies changes or resets. <see cref="Reset"/>
+/// tells clients the whole tree was replaced, so they should reload rather than reconcile.
+/// </summary>
+public sealed record TreeChangedNotification(long Revision, IReadOnlyList<int> ChangedIds, bool Reset);

@@ -25,19 +25,37 @@ public interface IElementRepository
         IReadOnlyList<int> ids,
         CancellationToken cancellationToken);
 
-    /// <summary>Inserts a new element and returns the generated id.</summary>
-    Task<int> AddAsync(Element element, long version, CancellationToken cancellationToken);
+    /// <summary>
+    /// Updates the values of the given non-deleted elements in a single statement. Returns the
+    /// number of affected rows; callers validate existence beforehand.
+    /// </summary>
+    Task<int> UpdateValuesAsync(
+        IReadOnlyList<Dtos.UpdateOperation> updates,
+        long version,
+        CancellationToken cancellationToken);
 
-    /// <summary>Updates the value of a non-deleted element. Returns false when it is missing or deleted.</summary>
-    Task<bool> UpdateValueAsync(int id, string value, long version, CancellationToken cancellationToken);
+    /// <summary>
+    /// Inserts a batch of new elements in one round trip and returns the generated id for each
+    /// temporary id. A negative <c>ParentId</c> refers to another addition in the same batch
+    /// (resolved via the parent navigation, so batch order does not matter).
+    /// </summary>
+    Task<IReadOnlyList<Dtos.AddedElementResult>> AddRangeAsync(
+        IReadOnlyList<Dtos.AddOperation> additions,
+        long version,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Soft-deletes an element and, recursively, every descendant — including descendants that were
-    /// never materialised in memory. Returns the number of affected rows.
+    /// never materialised in memory. Returns the number of affected rows. Does not touch the parent
+    /// (callers batch parent bumps through <see cref="TouchManyAsync"/>).
     /// </summary>
     Task<int> SoftDeleteSubtreeAsync(int id, long version, CancellationToken cancellationToken);
 
-    Task AddRangeAsync(IEnumerable<Element> elements, CancellationToken cancellationToken);
+    /// <summary>Stamps the given (still existing) rows with a new version in one statement.</summary>
+    Task TouchManyAsync(IReadOnlyList<int> ids, long version, CancellationToken cancellationToken);
+
+    /// <summary>Bulk-inserts rows with explicit ids (seeding / reset).</summary>
+    Task BulkInsertAsync(IEnumerable<Element> elements, CancellationToken cancellationToken);
 
     /// <summary>Removes every row (including soft-deleted) and restarts the identity sequence.</summary>
     Task ClearAllAsync(CancellationToken cancellationToken);

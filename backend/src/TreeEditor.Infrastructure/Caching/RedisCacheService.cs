@@ -5,22 +5,13 @@ using TreeEditor.Application.Interfaces;
 
 namespace TreeEditor.Infrastructure.Caching;
 
-public sealed class RedisCacheService : ICacheService
+public sealed class RedisCacheService(RedisConnection connection, ILogger<RedisCacheService> logger) : ICacheService
 {
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly RedisConnection _connection;
-    private readonly ILogger<RedisCacheService> _logger;
-
-    public RedisCacheService(RedisConnection connection, ILogger<RedisCacheService> logger)
-    {
-        _connection = connection;
-        _logger = logger;
-    }
-
     public async Task<T?> GetAsync<T>(string key, CancellationToken cancellationToken)
     {
-        var db = _connection.TryGetDatabase();
+        var db = connection.TryGetDatabase();
         if (db is null)
         {
             return default;
@@ -35,14 +26,14 @@ public sealed class RedisCacheService : ICacheService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Cache read failed for {Key}", key);
+            logger.LogDebug(ex, "Cache read failed for {Key}", key);
             return default;
         }
     }
 
     public async Task SetAsync<T>(string key, T value, TimeSpan ttl, CancellationToken cancellationToken)
     {
-        var db = _connection.TryGetDatabase();
+        var db = connection.TryGetDatabase();
         if (db is null)
         {
             return;
@@ -55,13 +46,13 @@ public sealed class RedisCacheService : ICacheService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Cache write failed for {Key}", key);
+            logger.LogDebug(ex, "Cache write failed for {Key}", key);
         }
     }
 
     public async Task RemoveAsync(string key, CancellationToken cancellationToken)
     {
-        var db = _connection.TryGetDatabase();
+        var db = connection.TryGetDatabase();
         if (db is null)
         {
             return;
@@ -73,14 +64,14 @@ public sealed class RedisCacheService : ICacheService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Cache eviction failed for {Key}", key);
+            logger.LogDebug(ex, "Cache eviction failed for {Key}", key);
         }
     }
 
     public async Task RemoveByPrefixAsync(string prefix, CancellationToken cancellationToken)
     {
-        var multiplexer = _connection.Multiplexer;
-        var db = _connection.TryGetDatabase();
+        var multiplexer = connection.Multiplexer;
+        var db = connection.TryGetDatabase();
         if (multiplexer is null || db is null)
         {
             return;
@@ -105,7 +96,7 @@ public sealed class RedisCacheService : ICacheService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Cache invalidation failed for prefix {Prefix}", prefix);
+            logger.LogWarning(ex, "Cache invalidation failed for prefix {Prefix}", prefix);
         }
     }
 }

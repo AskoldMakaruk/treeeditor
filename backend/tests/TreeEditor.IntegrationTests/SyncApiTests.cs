@@ -4,12 +4,8 @@ using TreeEditor.Application.Dtos;
 namespace TreeEditor.IntegrationTests;
 
 [Collection("api")]
-public sealed class SyncApiTests : ApiTestBase
+public sealed class SyncApiTests(TreeEditorApiFixture fixture) : ApiTestBase(fixture)
 {
-    public SyncApiTests(TreeEditorApiFixture fixture) : base(fixture)
-    {
-    }
-
     [Fact]
     public async Task Check_version_is_stable_when_nothing_changed()
     {

@@ -3,12 +3,8 @@ using TreeEditor.Domain.Entities;
 
 namespace TreeEditor.Infrastructure.Persistence;
 
-public sealed class AppDbContext : DbContext
+public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
-    {
-    }
-
     public DbSet<Element> Elements => Set<Element>();
 
     public DbSet<TreeRevision> TreeRevisions => Set<TreeRevision>();

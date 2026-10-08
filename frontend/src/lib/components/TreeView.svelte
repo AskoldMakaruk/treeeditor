@@ -15,7 +15,7 @@
   const pending = $derived(cacheTree.pending);
 
   onMount(() => {
-    void cacheTree.loadRoots(true);
+    void cacheTree.bootstrap();
   });
 
   function buildRows(): Row[] {
@@ -63,6 +63,14 @@
     return result;
   }
 
+  function formatDate(value: string | null): string {
+    if (!value) {
+      return 'unknown';
+    }
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleString();
+  }
+
   async function onApply(): Promise<void> {
     try {
       await cacheTree.apply();
@@ -90,9 +98,15 @@
     </div>
     <div class="actions">
       <button class="ghost" onclick={() => sync.reconcile()} disabled={cacheTree.busy}>Refresh</button>
-      <button class="danger" class:loading={cacheTree.resetting} onclick={onReset} disabled={cacheTree.busy}>
+      <button
+        class="danger"
+        class:loading={cacheTree.resetting}
+        onclick={onReset}
+        disabled={cacheTree.busy}
+        title="Discard local changes and reload from the server (does not touch the database)"
+      >
         {#if cacheTree.resetting}<span class="btn-spinner"></span>{/if}
-        {cacheTree.resetting ? 'Resetting…' : 'Reset'}
+        {cacheTree.resetting ? 'Discarding…' : 'Discard changes'}
       </button>
       <button
         class="primary"
@@ -127,6 +141,7 @@
     {/if}
 
     {#each rows as row (row.element.key)}
+      <div class="node">
       <div
         class="row"
         class:deleted={row.element.pendingDelete}
@@ -193,6 +208,37 @@
         >
           delete
         </button>
+      </div>
+
+      {#if row.element.conflict}
+        <div class="conflict" style="--depth: {row.depth}">
+          <p class="conflict-head">
+            This element changed on the server while you had unsaved changes.
+          </p>
+          <div class="conflict-grid">
+            <div class="conflict-side local">
+              <span class="conflict-label">Your variant</span>
+              <span class="conflict-value">
+                {row.element.pendingDelete ? '(deleted)' : row.element.value}
+              </span>
+              <span class="conflict-date">edited {formatDate(row.element.editedAt)}</span>
+            </div>
+            <div class="conflict-side server">
+              <span class="conflict-label">Database variant</span>
+              <span class="conflict-value">{row.element.serverValue ?? '(none)'}</span>
+              <span class="conflict-date">edited {formatDate(row.element.serverUpdatedAt)}</span>
+            </div>
+          </div>
+          <div class="conflict-actions">
+            <button class="ghost" onclick={() => cacheTree.resolveConflictKeepMine(row.element.key)}>
+              {row.element.pendingDelete ? 'Keep deletion' : 'Keep mine'}
+            </button>
+            <button class="ghost" onclick={() => cacheTree.resolveConflictUseServer(row.element.key)}>
+              {row.element.pendingDelete ? 'Restore from database' : 'Use database'}
+            </button>
+          </div>
+        </div>
+      {/if}
       </div>
     {/each}
   </div>
@@ -310,6 +356,75 @@
 
   .row.deleted input[type='text'] {
     text-decoration: line-through;
+  }
+
+  .node {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .conflict {
+    margin: 2px 0 8px calc(6px + var(--depth) * 16px + 30px);
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
+    border-left-width: 3px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--amber) 8%, var(--panel-2));
+    font-size: 0.8rem;
+  }
+
+  .conflict-head {
+    margin: 0 0 6px;
+    color: var(--amber);
+    font-size: 0.76rem;
+  }
+
+  .conflict-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .conflict-side {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+  }
+
+  .conflict-side.local {
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+
+  .conflict-side.server {
+    border-color: color-mix(in srgb, var(--green) 55%, transparent);
+  }
+
+  .conflict-label {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+
+  .conflict-value {
+    color: var(--text);
+    word-break: break-all;
+  }
+
+  .conflict-date {
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .conflict-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
   }
 
   .guide {

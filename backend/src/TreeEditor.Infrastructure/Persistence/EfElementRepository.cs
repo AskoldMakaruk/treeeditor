@@ -8,39 +8,36 @@ using TreeEditor.Domain.Entities;
 
 namespace TreeEditor.Infrastructure.Persistence;
 
-public sealed class EfElementRepository : IElementRepository
+public sealed class EfElementRepository(AppDbContext db, TimeProvider clock) : IElementRepository
 {
-    private readonly AppDbContext _db;
-    private readonly TimeProvider _clock;
-
-    public EfElementRepository(AppDbContext db, TimeProvider clock)
-    {
-        _db = db;
-        _clock = clock;
-    }
-
-    private sealed record NodeRow(int Id, string Value, int? ParentId, bool HasChildren, long Version);
+    private sealed record NodeRow(
+        int Id,
+        string Value,
+        int? ParentId,
+        bool HasChildren,
+        long Version,
+        DateTimeOffset UpdatedAt);
 
     private static ElementNodeDto Map(NodeRow row) =>
-        new(row.Id, row.Value, row.ParentId, row.HasChildren, row.Version);
+        new(row.Id, row.Value, row.ParentId, row.HasChildren, row.Version, row.UpdatedAt);
 
     public async Task<IReadOnlyList<ElementNodeDto>> GetRootsAsync(CancellationToken cancellationToken)
     {
-        var rows = await Project(_db.Elements.AsNoTracking().Where(e => e.ParentId == null))
+        var rows = await Project(db.Elements.AsNoTracking().Where(e => e.ParentId == null))
             .ToListAsync(cancellationToken);
         return rows.OrderBy(row => row.Id).Select(Map).ToList();
     }
 
     public async Task<IReadOnlyList<ElementNodeDto>> GetChildrenAsync(int parentId, CancellationToken cancellationToken)
     {
-        var rows = await Project(_db.Elements.AsNoTracking().Where(e => e.ParentId == parentId))
+        var rows = await Project(db.Elements.AsNoTracking().Where(e => e.ParentId == parentId))
             .ToListAsync(cancellationToken);
         return rows.OrderBy(row => row.Id).Select(Map).ToList();
     }
 
     public async Task<ElementNodeDto?> GetByIdAsync(int id, CancellationToken cancellationToken)
     {
-        var row = await Project(_db.Elements.AsNoTracking().Where(e => e.Id == id))
+        var row = await Project(db.Elements.AsNoTracking().Where(e => e.Id == id))
             .FirstOrDefaultAsync(cancellationToken);
         return row is null ? null : Map(row);
     }
@@ -50,26 +47,27 @@ public sealed class EfElementRepository : IElementRepository
             e.Id,
             e.Value,
             e.ParentId,
-            _db.Elements.Any(c => c.ParentId == e.Id),
-            e.Version));
+            db.Elements.Any(c => c.ParentId == e.Id),
+            e.Version,
+            e.UpdatedAt));
 
     public async Task<long> GetRevisionAsync(CancellationToken cancellationToken) =>
-        await _db.TreeRevisions.AsNoTracking()
+        await db.TreeRevisions.AsNoTracking()
             .Where(r => r.Id == TreeRevision.SingletonId)
             .Select(r => r.Revision)
             .FirstOrDefaultAsync(cancellationToken);
 
     public async Task<long> BumpRevisionAsync(CancellationToken cancellationToken)
     {
-        var row = await _db.TreeRevisions.FirstOrDefaultAsync(r => r.Id == TreeRevision.SingletonId, cancellationToken);
+        var row = await db.TreeRevisions.FirstOrDefaultAsync(r => r.Id == TreeRevision.SingletonId, cancellationToken);
         if (row is null)
         {
             row = new TreeRevision { Id = TreeRevision.SingletonId, Revision = 1 };
-            _db.TreeRevisions.Add(row);
+            db.TreeRevisions.Add(row);
         }
 
         row.Revision += 1;
-        await _db.SaveChangesAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
         return row.Revision;
     }
 
@@ -82,45 +80,89 @@ public sealed class EfElementRepository : IElementRepository
             return [];
         }
 
-        return await _db.Elements.AsNoTracking()
+        return await db.Elements.AsNoTracking()
             .Where(e => ids.Contains(e.Id))
             .Select(e => new NodeVersionDto(e.Id, e.Version))
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<int> AddAsync(Element element, long version, CancellationToken cancellationToken)
+    public async Task<int> UpdateValuesAsync(
+        IReadOnlyList<UpdateOperation> updates,
+        long version,
+        CancellationToken cancellationToken)
     {
-        element.Version = version;
-        _db.Elements.Add(element);
-        await _db.SaveChangesAsync(cancellationToken);
-
-        // Adding a child changes the parent's children-set -> bump its version.
-        if (element.ParentId is int parentId)
+        if (updates.Count == 0)
         {
-            await TouchAsync(parentId, version, cancellationToken);
+            return 0;
         }
 
-        return element.Id;
+        var ids = updates.Select(update => update.Id).ToArray();
+        var values = updates.Select(update => update.Value).ToArray();
+        var now = clock.GetUtcNow();
+
+        var affected = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+             UPDATE elements AS e
+             SET value = u.value, version = {version}, updated_at = {now}
+             FROM unnest({ids}::int[], {values}::text[]) AS u(id, value)
+             WHERE e.id = u.id AND e.is_deleted = FALSE
+             """,
+            cancellationToken);
+
+        db.ChangeTracker.Clear();
+        return affected;
     }
 
-    public async Task<bool> UpdateValueAsync(int id, string value, long version, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<AddedElementResult>> AddRangeAsync(
+        IReadOnlyList<AddOperation> additions,
+        long version,
+        CancellationToken cancellationToken)
     {
-        var element = await _db.Elements.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
-        if (element is null)
+        if (additions.Count == 0)
         {
-            return false;
+            return [];
         }
 
-        element.Value = value;
-        element.Version = version;
-        element.UpdatedAt = _clock.GetUtcNow();
-        await _db.SaveChangesAsync(cancellationToken);
-        return true;
+        var now = clock.GetUtcNow();
+        var byTempId = new Dictionary<int, Element>();
+        var elements = new List<Element>(additions.Count);
+
+        foreach (var addition in additions)
+        {
+            var element = new Element
+            {
+                Value = addition.Value,
+                ParentId = addition.ParentId >= 0 ? addition.ParentId : null,
+                Version = version,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+
+            byTempId[addition.TempId] = element;
+            elements.Add(element);
+        }
+
+        // A negative parent id refers to another addition in this batch: link via the navigation
+        // so EF orders the inserts and fills the generated foreign keys in one SaveChanges.
+        foreach (var addition in additions)
+        {
+            if (addition.ParentId < 0)
+            {
+                byTempId[addition.TempId].Parent = byTempId[addition.ParentId];
+            }
+        }
+
+        db.Elements.AddRange(elements);
+        await db.SaveChangesAsync(cancellationToken);
+
+        return additions
+            .Select(addition => new AddedElementResult(addition.TempId, byTempId[addition.TempId].Id))
+            .ToList();
     }
 
     public async Task<int> SoftDeleteSubtreeAsync(int id, long version, CancellationToken cancellationToken)
     {
-        var affected = await _db.Database.ExecuteSqlInterpolatedAsync(
+        var affected = await db.Database.ExecuteSqlInterpolatedAsync(
             $"""
              WITH RECURSIVE subtree AS (
                  SELECT id FROM elements WHERE id = {id} AND is_deleted = FALSE
@@ -136,13 +178,23 @@ public sealed class EfElementRepository : IElementRepository
              """,
             cancellationToken);
 
-        // Removing the subtree changes the (still existing) parent's children-set.
-        await _db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE elements SET version = {version}, updated_at = NOW() WHERE id = (SELECT parent_id FROM elements WHERE id = {id})",
+        db.ChangeTracker.Clear();
+        return affected;
+    }
+
+    public async Task TouchManyAsync(IReadOnlyList<int> ids, long version, CancellationToken cancellationToken)
+    {
+        var distinct = ids.Distinct().ToArray();
+        if (distinct.Length == 0)
+        {
+            return;
+        }
+
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE elements SET version = {version}, updated_at = NOW() WHERE id = ANY({distinct}::int[]) AND is_deleted = FALSE",
             cancellationToken);
 
-        _db.ChangeTracker.Clear();
-        return affected;
+        db.ChangeTracker.Clear();
     }
 
     /// <summary>
@@ -150,7 +202,7 @@ public sealed class EfElementRepository : IElementRepository
     /// seeding/reset of thousands of elements fast. Rows are written parents-first (ordered by id;
     /// the sample data is numbered parent-before-child).
     /// </summary>
-    public async Task AddRangeAsync(IEnumerable<Element> elements, CancellationToken cancellationToken)
+    public async Task BulkInsertAsync(IEnumerable<Element> elements, CancellationToken cancellationToken)
     {
         var ordered = elements.OrderBy(element => element.Id).ToList();
         if (ordered.Count == 0)
@@ -158,7 +210,7 @@ public sealed class EfElementRepository : IElementRepository
             return;
         }
 
-        var connection = (NpgsqlConnection)_db.Database.GetDbConnection();
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open)
         {
             await connection.OpenAsync(cancellationToken);
@@ -193,29 +245,22 @@ public sealed class EfElementRepository : IElementRepository
 
     public async Task ClearAllAsync(CancellationToken cancellationToken)
     {
-        await _db.Database.ExecuteSqlRawAsync(
+        await db.Database.ExecuteSqlRawAsync(
             "TRUNCATE TABLE elements RESTART IDENTITY CASCADE",
             cancellationToken);
-        _db.ChangeTracker.Clear();
+        db.ChangeTracker.Clear();
     }
 
     public async Task SyncIdentitySequenceAsync(CancellationToken cancellationToken)
     {
-        await _db.Database.ExecuteSqlRawAsync(
+        await db.Database.ExecuteSqlRawAsync(
             "SELECT setval(pg_get_serial_sequence('elements', 'id'), COALESCE((SELECT MAX(id) FROM elements), 1))",
             cancellationToken);
     }
 
     public async Task<ITransaction> BeginTransactionAsync(CancellationToken cancellationToken)
     {
-        var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+        var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         return new EfTransaction(transaction);
-    }
-
-    private async Task TouchAsync(int id, long version, CancellationToken cancellationToken)
-    {
-        await _db.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE elements SET version = {version}, updated_at = NOW() WHERE id = {id}",
-            cancellationToken);
     }
 }

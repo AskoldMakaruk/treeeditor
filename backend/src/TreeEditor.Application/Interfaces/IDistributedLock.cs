@@ -13,10 +13,4 @@ public interface IDistributedLock
     Task<IAsyncDisposable> AcquireAsync(string key, TimeSpan timeout, CancellationToken cancellationToken);
 }
 
-public sealed class LockUnavailableException : Exception
-{
-    public LockUnavailableException(string key)
-        : base($"Could not acquire lock '{key}' within the timeout.")
-    {
-    }
-}
+public sealed class LockUnavailableException(string key) : Exception($"Could not acquire lock '{key}' within the timeout.");

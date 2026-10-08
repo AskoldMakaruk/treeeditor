@@ -6,7 +6,7 @@ namespace TreeEditor.Infrastructure.Seeding;
 
 /// <summary>
 /// Loads the initial sample data from <c>data/sample-tree.json</c>, which is embedded into this
-/// assembly (the file is the source of truth in the repo; see <c>scripts/build-sample-tree.py</c>).
+/// assembly (the file is the source of truth in the repo; see <c>scripts/build-sample-tree.cs</c>).
 /// It holds ~13k elements forming a 10-level hierarchy, so lazy loading can be exercised at scale.
 /// </summary>
 public sealed class SampleDataProvider : ISampleDataProvider

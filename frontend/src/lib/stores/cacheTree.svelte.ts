@@ -16,7 +16,23 @@ export class CacheTreeStore {
   resetting = $state(false);
   loadingKeys = $state<number[]>([]);
 
+  private static readonly StorageKey = 'tree-editor:cache';
+  private static readonly StorageVersion = 1;
+
   private nextTempId = -1;
+  private persistHandle: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    const restored = CacheTreeStore.readStorage();
+    if (restored && restored.length > 0) {
+      this.elements = restored;
+      // Keep new temporary ids below any restored ones so they cannot collide.
+      this.nextTempId = restored.reduce(
+        (min, element) => (element.key < 0 && element.key < min ? element.key : min),
+        -1,
+      );
+    }
+  }
 
   private inform(text: string): void {
     this.message = text;
@@ -26,6 +42,124 @@ export class CacheTreeStore {
   private fail(text: string): void {
     this.message = text;
     this.messageType = 'error';
+  }
+
+  /**
+   * Restores the persisted cache (if any) and then loads the server tree. When a cache was
+   * restored we merge (reset = false) so pending local changes are kept; only a cold start with
+   * nothing persisted clears the cache first.
+   */
+  async bootstrap(): Promise<void> {
+    await this.loadRoots(this.elements.length === 0);
+  }
+
+  private static readStorage(): CachedElement[] | null {
+    if (typeof localStorage === 'undefined') {
+      return null;
+    }
+
+    try {
+      const raw = localStorage.getItem(CacheTreeStore.StorageKey);
+      if (!raw) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw) as { version?: number; elements?: unknown };
+      if (parsed?.version !== CacheTreeStore.StorageVersion) {
+        return null;
+      }
+
+      return CacheTreeStore.normalize(parsed.elements);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fills in defaults so a slightly older/partial payload cannot break the cache. */
+  private static normalize(raw: unknown): CachedElement[] | null {
+    if (!Array.isArray(raw)) {
+      return null;
+    }
+
+    const result: CachedElement[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+
+      const element = item as Partial<CachedElement>;
+      if (typeof element.key !== 'number' || typeof element.value !== 'string') {
+        continue;
+      }
+
+      result.push({
+        key: element.key,
+        id: typeof element.id === 'number' ? element.id : null,
+        parentId: typeof element.parentId === 'number' ? element.parentId : null,
+        value: element.value,
+        hasChildren: element.hasChildren === true,
+        expanded: element.expanded === true,
+        version: typeof element.version === 'number' ? element.version : null,
+        pendingAdd: element.pendingAdd === true,
+        pendingUpdate: element.pendingUpdate === true,
+        pendingDelete: element.pendingDelete === true,
+        conflict: element.conflict === true,
+        serverValue: typeof element.serverValue === 'string' ? element.serverValue : null,
+        serverUpdatedAt: typeof element.serverUpdatedAt === 'string' ? element.serverUpdatedAt : null,
+        editedAt: typeof element.editedAt === 'string' ? element.editedAt : null,
+      });
+    }
+
+    return result.length > 0 ? result : null;
+  }
+
+  /** Debounced write so rapid edits do not thrash localStorage. */
+  private schedulePersist(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    if (this.persistHandle !== null) {
+      clearTimeout(this.persistHandle);
+    }
+
+    this.persistHandle = setTimeout(() => {
+      this.persistHandle = null;
+      this.persistNow();
+    }, 300);
+  }
+
+  private persistNow(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    try {
+      const snapshot = $state.snapshot(this.elements);
+      localStorage.setItem(
+        CacheTreeStore.StorageKey,
+        JSON.stringify({ version: CacheTreeStore.StorageVersion, elements: snapshot }),
+      );
+    } catch {
+      // Quota exceeded or storage unavailable: persistence is best-effort.
+    }
+  }
+
+  private clearStorage(): void {
+    if (typeof localStorage === 'undefined') {
+      return;
+    }
+
+    if (this.persistHandle !== null) {
+      clearTimeout(this.persistHandle);
+      this.persistHandle = null;
+    }
+
+    try {
+      localStorage.removeItem(CacheTreeStore.StorageKey);
+    } catch {
+      // ignore
+    }
   }
 
   get pending(): { updates: number; additions: number; deletions: number } {
@@ -85,11 +219,11 @@ export class CacheTreeStore {
   load(node: ElementNode): void {
     const existing = this.elements.find((element) => element.key === node.id);
     if (existing) {
-      existing.version = node.version;
       if (!existing.pendingUpdate && !existing.pendingDelete) {
         existing.value = node.value;
         existing.parentId = node.parentId;
         existing.hasChildren = node.hasChildren;
+        existing.version = node.version;
       }
       return;
     }
@@ -108,6 +242,9 @@ export class CacheTreeStore {
         pendingUpdate: false,
         pendingDelete: false,
         conflict: false,
+        serverValue: null,
+        serverUpdatedAt: null,
+        editedAt: null,
       },
     ];
   }
@@ -116,6 +253,7 @@ export class CacheTreeStore {
     for (const node of nodes) {
       this.load(node);
     }
+    this.schedulePersist();
   }
 
   /** Expands a node, loading its children on first expansion; collapses when already open. */
@@ -127,6 +265,7 @@ export class CacheTreeStore {
 
     if (element.expanded) {
       element.expanded = false;
+      this.schedulePersist();
       return;
     }
 
@@ -138,6 +277,7 @@ export class CacheTreeStore {
     }
 
     element.expanded = true;
+    this.schedulePersist();
   }
 
   private async loadChildren(id: number): Promise<void> {
@@ -193,9 +333,11 @@ export class CacheTreeStore {
       return;
     }
     element.value = value;
+    element.editedAt = new Date().toISOString();
     if (!element.pendingAdd) {
       element.pendingUpdate = true;
     }
+    this.schedulePersist();
   }
 
   /** Adds a pending child and opens the parent so it is visible. */
@@ -228,9 +370,13 @@ export class CacheTreeStore {
         pendingUpdate: false,
         pendingDelete: false,
         conflict: false,
+        serverValue: null,
+        serverUpdatedAt: null,
+        editedAt: new Date().toISOString(),
       },
     ];
     parent.expanded = true;
+    this.schedulePersist();
   }
 
   /** Marks an element and its cached descendants as deleted (the server cascades the rest). */
@@ -240,11 +386,14 @@ export class CacheTreeStore {
     }
 
     const subtree = new Set<number>([key, ...this.collectDescendants(key)]);
+    const now = new Date().toISOString();
     for (const element of this.elements) {
       if (subtree.has(element.key)) {
         element.pendingDelete = true;
+        element.editedAt = now;
       }
     }
+    this.schedulePersist();
   }
 
   async apply(): Promise<void> {
@@ -255,9 +404,7 @@ export class CacheTreeStore {
       additions: this.elements
         .filter((element) => element.pendingAdd && !element.pendingDelete)
         .map((element) => ({ tempId: element.key, parentId: element.parentId as number, value: element.value })),
-      deletions: this.elements
-        .filter((element) => element.pendingDelete && element.id !== null)
-        .map((element) => element.id as number),
+      deletions: this.deletionRoots(),
     };
 
     this.busy = true;
@@ -276,6 +423,7 @@ export class CacheTreeStore {
         element.pendingUpdate = false;
         element.conflict = false;
       }
+      this.schedulePersist();
       this.inform(
         `Applied ${result.updatedCount} update(s), ${result.addedCount} addition(s), ${result.deletedCount} deletion(s).`,
       );
@@ -288,15 +436,15 @@ export class CacheTreeStore {
     }
   }
 
+  /** Discards all local pending changes and reloads the tree from the server. Does not touch the DB. */
   async reset(): Promise<void> {
     this.busy = true;
     this.resetting = true;
     this.message = null;
+    this.clearStorage();
     try {
-      await api.reset();
-      this.elements = [];
-      await this.loadRoots();
-      this.inform('Database restored to the initial sample data.');
+      await this.loadRoots(true);
+      this.inform('Changes discarded. Reloaded from the server.');
     } catch (error) {
       this.fail(`Reset failed: ${(error as Error).message}`);
       throw error;
@@ -326,6 +474,9 @@ export class CacheTreeStore {
     if (element.pendingUpdate || element.pendingDelete) {
       element.conflict = true;
       element.version = node.version;
+      element.serverValue = node.value;
+      element.serverUpdatedAt = node.updatedAt;
+      this.schedulePersist();
       return;
     }
 
@@ -334,6 +485,39 @@ export class CacheTreeStore {
     element.hasChildren = node.hasChildren;
     element.version = node.version;
     element.conflict = false;
+    element.serverValue = null;
+    element.serverUpdatedAt = null;
+    this.schedulePersist();
+  }
+
+  /** Keep the local variant and clear the conflict so it can be applied. */
+  resolveConflictKeepMine(key: number): void {
+    const element = this.elements.find((candidate) => candidate.key === key);
+    if (!element) {
+      return;
+    }
+
+    element.conflict = false;
+    element.serverValue = null;
+    element.serverUpdatedAt = null;
+    this.schedulePersist();
+  }
+
+  /** Discard the local edit and take the database variant. */
+  resolveConflictUseServer(key: number): void {
+    const element = this.elements.find((candidate) => candidate.key === key);
+    if (!element || element.serverValue === null) {
+      return;
+    }
+
+    element.value = element.serverValue;
+    element.pendingUpdate = false;
+    element.pendingDelete = false;
+    element.conflict = false;
+    element.serverValue = null;
+    element.serverUpdatedAt = null;
+    element.editedAt = null;
+    this.schedulePersist();
   }
 
   /** Removes elements that were deleted on the server (and their cached descendants). */
@@ -363,7 +547,28 @@ export class CacheTreeStore {
 
     if (doomed.size > 0) {
       this.elements = this.elements.filter((element) => !doomed.has(element.key));
+      this.schedulePersist();
     }
+  }
+
+  /**
+   * Only the top-most pending deletions are sent. Descendants that share a pending-deleted
+   * ancestor are covered by the server's recursive cascade, so listing them would make the
+   * server reject them as already deleted.
+   */
+  private deletionRoots(): number[] {
+    const deletedKeys = new Set(
+      this.elements.filter((element) => element.pendingDelete).map((element) => element.key),
+    );
+
+    return this.elements
+      .filter(
+        (element) =>
+          element.pendingDelete &&
+          element.id !== null &&
+          !(element.parentId !== null && deletedKeys.has(element.parentId)),
+      )
+      .map((element) => element.id as number);
   }
 
   private rebase(added: { tempId: number; id: number }[]): void {

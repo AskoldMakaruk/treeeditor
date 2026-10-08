@@ -2,7 +2,6 @@ using TreeEditor.Application.Caching;
 using TreeEditor.Application.Dtos;
 using TreeEditor.Application.Interfaces;
 using TreeEditor.Domain;
-using TreeEditor.Domain.Entities;
 
 namespace TreeEditor.Application.Services;
 
@@ -10,106 +9,157 @@ namespace TreeEditor.Application.Services;
 /// Applies the browser cache's pending edits, additions and deletions in a single transaction
 /// while holding the apply lock. Deletion cascades to unloaded descendants in the database.
 /// Touched rows are stamped with a new tree revision, and connected clients are notified.
+/// Batch operations are set-based so large batches stay within a few round trips.
 /// </summary>
-public sealed class ApplyService : IApplyService
+public sealed class ApplyService(
+    IElementRepository repository,
+    ICacheService cache,
+    IDistributedLock distributedLock,
+    ITreeChangeNotifier notifier)
+    : IApplyService
 {
     private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(10);
 
-    private readonly IElementRepository _repository;
-    private readonly ICacheService _cache;
-    private readonly IDistributedLock _lock;
-    private readonly ITreeChangeNotifier _notifier;
-    private readonly TimeProvider _clock;
-
-    public ApplyService(
-        IElementRepository repository,
-        ICacheService cache,
-        IDistributedLock distributedLock,
-        ITreeChangeNotifier notifier,
-        TimeProvider clock)
-    {
-        _repository = repository;
-        _cache = cache;
-        _lock = distributedLock;
-        _notifier = notifier;
-        _clock = clock;
-    }
-
     public async Task<ApplyResult> ApplyAsync(ApplyRequest request, CancellationToken cancellationToken)
     {
-        await using var handle = await _lock.AcquireAsync(CacheKeys.ApplyLock, LockTimeout, cancellationToken);
-        await using var transaction = await _repository.BeginTransactionAsync(cancellationToken);
+        await using var handle = await distributedLock.AcquireAsync(CacheKeys.TreeLock, LockTimeout, cancellationToken);
+        await using var transaction = await repository.BeginTransactionAsync(cancellationToken);
 
-        var revision = await _repository.BumpRevisionAsync(cancellationToken);
+        var revision = await repository.BumpRevisionAsync(cancellationToken);
         var changedIds = new HashSet<int>();
+        var touchedParents = new HashSet<int>();
 
-        var updated = 0;
-        var added = 0;
-        var deleted = 0;
-        var additions = new List<AddedElementResult>();
-        var tempToReal = new Dictionary<int, int>();
+        var updated = await ApplyUpdatesAsync(request.Updates, revision, changedIds, cancellationToken);
+        var (added, additions) = await ApplyAdditionsAsync(
+            request.Additions, revision, changedIds, touchedParents, cancellationToken);
+        var deleted = await ApplyDeletionsAsync(
+            request.Deletions, revision, changedIds, touchedParents, cancellationToken);
 
-        foreach (var update in request.Updates)
+        // Adding/removing a child changes the parent's children-set -> bump its version.
+        if (touchedParents.Count > 0)
         {
-            var value = RequireValue(update.Value, update.Id);
-            var valueChanged = await _repository.UpdateValueAsync(update.Id, value, revision, cancellationToken);
-            if (!valueChanged)
-            {
-                throw new DomainException($"Element {update.Id} does not exist or has been deleted.");
-            }
+            await repository.TouchManyAsync(touchedParents.ToList(), revision, cancellationToken);
+        }
 
+        await transaction.CommitAsync(cancellationToken);
+
+        // Any node may have changed (or a subtree may have been removed): drop all tree reads.
+        await cache.RemoveByPrefixAsync(CacheKeys.TreePrefix, cancellationToken);
+
+        var changed = changedIds.ToList();
+        await notifier.NotifyChangedAsync(revision, changed, reset: false, cancellationToken);
+
+        return new ApplyResult(updated, added, deleted, additions, revision);
+    }
+
+    private async Task<int> ApplyUpdatesAsync(
+        IReadOnlyList<UpdateOperation> updates,
+        long revision,
+        HashSet<int> changedIds,
+        CancellationToken cancellationToken)
+    {
+        if (updates.Count == 0)
+        {
+            return 0;
+        }
+
+        var ids = updates.Select(update => update.Id).Distinct().ToArray();
+        var existing = (await repository.GetVersionsAsync(ids, cancellationToken))
+            .Select(node => node.Id)
+            .ToHashSet();
+
+        if (FirstMissing(ids, existing) is int missingId)
+        {
+            throw new DomainException($"Element {missingId} does not exist or has been deleted.");
+        }
+
+        var normalized = updates
+            .Select(update => new UpdateOperation(update.Id, RequireValue(update.Value, update.Id)))
+            .ToList();
+
+        var affected = await repository.UpdateValuesAsync(normalized, revision, cancellationToken);
+
+        foreach (var update in updates)
+        {
             changedIds.Add(update.Id);
-            updated++;
         }
 
-        foreach (var addition in request.Additions)
+        return affected;
+    }
+
+    private async Task<(int Added, IReadOnlyList<AddedElementResult> Result)> ApplyAdditionsAsync(
+        IReadOnlyList<AddOperation> additions,
+        long revision,
+        HashSet<int> changedIds,
+        HashSet<int> touchedParents,
+        CancellationToken cancellationToken)
+    {
+        if (additions.Count == 0)
         {
-            var value = RequireValue(addition.Value, addition.TempId);
-
-            var parentId = addition.ParentId;
-            if (parentId < 0)
-            {
-                // The parent is another pending addition; resolve it to the id assigned above.
-                if (!tempToReal.TryGetValue(parentId, out var realParentId))
-                {
-                    throw new DomainException(
-                        $"Parent {parentId} of new element {addition.TempId} was not added in the same batch.");
-                }
-
-                parentId = realParentId;
-            }
-            else
-            {
-                var parent = await _repository.GetByIdAsync(parentId, cancellationToken);
-                if (parent is null)
-                {
-                    throw new DomainException($"Parent element {parentId} does not exist or has been deleted.");
-                }
-            }
-
-            var now = _clock.GetUtcNow();
-            var id = await _repository.AddAsync(
-                new Element
-                {
-                    Value = value,
-                    ParentId = parentId,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                },
-                revision,
-                cancellationToken);
-
-            tempToReal[addition.TempId] = id;
-            additions.Add(new AddedElementResult(addition.TempId, id));
-            changedIds.Add(id);
-            changedIds.Add(parentId);
-            added++;
+            return (0, []);
         }
 
-        foreach (var id in request.Deletions)
+        var tempIds = additions.Select(addition => addition.TempId).ToHashSet();
+
+        // Existing (non-negative) parents must exist; negative ids must refer to another addition.
+        var realParentIds = additions
+            .Where(addition => addition.ParentId >= 0)
+            .Select(addition => addition.ParentId)
+            .Distinct()
+            .ToArray();
+
+        if (realParentIds.Length > 0)
         {
-            var node = await _repository.GetByIdAsync(id, cancellationToken);
-            var affected = await _repository.SoftDeleteSubtreeAsync(id, revision, cancellationToken);
+            var existing = (await repository.GetVersionsAsync(realParentIds, cancellationToken))
+                .Select(node => node.Id)
+                .ToHashSet();
+
+            if (FirstMissing(realParentIds, existing) is int missingParent)
+            {
+                throw new DomainException($"Parent element {missingParent} does not exist or has been deleted.");
+            }
+        }
+
+        foreach (var addition in additions)
+        {
+            if (addition.ParentId < 0 && !tempIds.Contains(addition.ParentId))
+            {
+                throw new DomainException(
+                    $"Parent {addition.ParentId} of new element {addition.TempId} was not added in the same batch.");
+            }
+        }
+
+        var normalized = additions
+            .Select(addition => new AddOperation(
+                addition.TempId,
+                addition.ParentId,
+                RequireValue(addition.Value, addition.TempId)))
+            .ToList();
+
+        var result = await repository.AddRangeAsync(normalized, revision, cancellationToken);
+        var tempToReal = result.ToDictionary(item => item.TempId, item => item.Id);
+
+        foreach (var addition in additions)
+        {
+            changedIds.Add(tempToReal[addition.TempId]);
+            touchedParents.Add(addition.ParentId >= 0 ? addition.ParentId : tempToReal[addition.ParentId]);
+        }
+
+        return (additions.Count, result);
+    }
+
+    private async Task<int> ApplyDeletionsAsync(
+        IReadOnlyList<int> deletions,
+        long revision,
+        HashSet<int> changedIds,
+        HashSet<int> touchedParents,
+        CancellationToken cancellationToken)
+    {
+        var deleted = 0;
+        foreach (var id in deletions)
+        {
+            var node = await repository.GetByIdAsync(id, cancellationToken);
+            var affected = await repository.SoftDeleteSubtreeAsync(id, revision, cancellationToken);
             if (affected == 0)
             {
                 throw new DomainException($"Element {id} does not exist or has already been deleted.");
@@ -118,21 +168,26 @@ public sealed class ApplyService : IApplyService
             changedIds.Add(id);
             if (node?.ParentId is int parentId)
             {
-                changedIds.Add(parentId);
+                touchedParents.Add(parentId);
             }
 
             deleted += affected;
         }
 
-        await transaction.CommitAsync(cancellationToken);
+        return deleted;
+    }
 
-        // Any node may have changed (or a subtree may have been removed): drop all tree reads.
-        await _cache.RemoveByPrefixAsync(CacheKeys.TreePrefix, cancellationToken);
+    private static int? FirstMissing(IReadOnlyList<int> ids, HashSet<int> existing)
+    {
+        foreach (var id in ids)
+        {
+            if (!existing.Contains(id))
+            {
+                return id;
+            }
+        }
 
-        var changed = changedIds.ToList();
-        await _notifier.NotifyChangedAsync(revision, changed, cancellationToken);
-
-        return new ApplyResult(updated, added, deleted, additions, revision);
+        return null;
     }
 
     private static string RequireValue(string value, int id)

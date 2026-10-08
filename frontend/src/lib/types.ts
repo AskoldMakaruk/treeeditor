@@ -5,6 +5,8 @@ export interface ElementNode {
   hasChildren: boolean;
   /** Tree revision this node last changed at; compared to detect changes elsewhere. */
   version: number;
+  /** When the server last changed this row (ISO string). */
+  updatedAt: string;
 }
 
 export interface UpdateOperation {
@@ -51,4 +53,6 @@ export interface TreeCheckResult {
 export interface TreeChangedNotification {
   revision: number;
   changedIds: number[];
+  /** True when the whole tree was replaced (Reset), so clients should reload rather than reconcile. */
+  reset: boolean;
 }

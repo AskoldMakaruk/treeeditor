@@ -16,12 +16,20 @@ public interface ISyncService
 /// </summary>
 public interface ITreeChangeNotifier
 {
-    Task NotifyChangedAsync(long revision, IReadOnlyList<int> changedIds, CancellationToken cancellationToken);
+    Task NotifyChangedAsync(
+        long revision,
+        IReadOnlyList<int> changedIds,
+        bool reset,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>No-op implementation for hosts without real-time transport (e.g. tests).</summary>
 public sealed class NullTreeChangeNotifier : ITreeChangeNotifier
 {
-    public Task NotifyChangedAsync(long revision, IReadOnlyList<int> changedIds, CancellationToken cancellationToken)
+    public Task NotifyChangedAsync(
+        long revision,
+        IReadOnlyList<int> changedIds,
+        bool reset,
+        CancellationToken cancellationToken)
         => Task.CompletedTask;
 }

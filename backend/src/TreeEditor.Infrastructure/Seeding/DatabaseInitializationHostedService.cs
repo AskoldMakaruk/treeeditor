@@ -9,27 +9,18 @@ namespace TreeEditor.Infrastructure.Seeding;
 /// Runs migrations and seeding when the host starts. Kept out of Program.cs so that
 /// design-time tooling (dotnet ef) never touches the database.
 /// </summary>
-public sealed class DatabaseInitializationHostedService : IHostedService
+public sealed class DatabaseInitializationHostedService(
+    IServiceScopeFactory scopeFactory,
+    ILogger<DatabaseInitializationHostedService> logger) : IHostedService
 {
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<DatabaseInitializationHostedService> _logger;
-
-    public DatabaseInitializationHostedService(
-        IServiceScopeFactory scopeFactory,
-        ILogger<DatabaseInitializationHostedService> logger)
-    {
-        _scopeFactory = scopeFactory;
-        _logger = logger;
-    }
-
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        using var scope = _scopeFactory.CreateScope();
+        using var scope = scopeFactory.CreateScope();
         var initializer = scope.ServiceProvider.GetRequiredService<IDatabaseInitializer>();
 
-        _logger.LogInformation("Applying migrations and ensuring sample data is present...");
+        logger.LogInformation("Applying migrations and ensuring sample data is present...");
         await initializer.InitializeAsync(cancellationToken);
-        _logger.LogInformation("Database is ready.");
+        logger.LogInformation("Database is ready.");
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

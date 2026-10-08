@@ -5,30 +5,30 @@ using TreeEditor.Application.Interfaces;
 namespace TreeEditor.Api.Realtime;
 
 /// <summary>Broadcasts change notifications over SignalR.</summary>
-public sealed class SignalRTreeChangeNotifier : ITreeChangeNotifier
+public sealed class SignalRTreeChangeNotifier(IHubContext<TreeHub> hub, ILogger<SignalRTreeChangeNotifier> logger) : ITreeChangeNotifier
 {
-    private readonly IHubContext<TreeHub> _hub;
-    private readonly ILogger<SignalRTreeChangeNotifier> _logger;
-
-    public SignalRTreeChangeNotifier(IHubContext<TreeHub> hub, ILogger<SignalRTreeChangeNotifier> logger)
-    {
-        _hub = hub;
-        _logger = logger;
-    }
-
-    public async Task NotifyChangedAsync(long revision, IReadOnlyList<int> changedIds, CancellationToken cancellationToken)
+    public async Task NotifyChangedAsync(
+        long revision,
+        IReadOnlyList<int> changedIds,
+        bool reset,
+        CancellationToken cancellationToken)
     {
         try
         {
-            await _hub.Clients.All.SendAsync(
+            await hub.Clients.All.SendAsync(
                 "TreeChanged",
-                new TreeChangedNotification(revision, changedIds),
+                new TreeChangedNotification(revision, changedIds, reset),
                 cancellationToken);
         }
         catch (Exception ex)
         {
             // Real-time delivery is best-effort; clients also reconcile on reconnect.
-            _logger.LogWarning(ex, "Failed to broadcast TreeChanged (revision {Revision}, {Count} ids)", revision, changedIds.Count);
+            logger.LogWarning(
+                ex,
+                "Failed to broadcast TreeChanged (revision {Revision}, {Count} ids, reset {Reset})",
+                revision,
+                changedIds.Count,
+                reset);
         }
     }
 }

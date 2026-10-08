@@ -36,6 +36,10 @@ export class SyncStore {
       .build();
 
     connection.on('TreeChanged', (notification: TreeChangedNotification) => {
+      if (notification.reset) {
+        void this.reloadAfterReset(notification.revision);
+        return;
+      }
       if (this.revision === null || notification.revision !== this.revision) {
         void this.reconcile();
       }
@@ -64,6 +68,17 @@ export class SyncStore {
     }
   }
 
+  /** A Reset replaced the whole tree: drop the cache and reload from the single root. */
+  private async reloadAfterReset(revision: number): Promise<void> {
+    this.revision = revision;
+    this.error = null;
+    try {
+      await cacheTree.loadRoots(true);
+    } catch (error) {
+      this.error = (error as Error).message;
+    }
+  }
+
   async reconcile(): Promise<void> {
     if (this.reconciling) {
       return;
@@ -71,7 +86,8 @@ export class SyncStore {
 
     this.reconciling = true;
     try {
-      const result = await api.check(cacheTree.serverIds());
+      const held = cacheTree.serverIds();
+      const result = await api.check(held);
       this.revision = result.revision;
       this.error = null;
 
@@ -93,6 +109,12 @@ export class SyncStore {
 
       if (result.deleted.length > 0) {
         cacheTree.removeServerIds(result.deleted);
+      }
+
+      // Fallback for a missed Reset event: if everything we held is gone, reload from the root.
+      if (held.length > 0 && result.nodes.length === 0 && result.deleted.length === held.length) {
+        await cacheTree.loadRoots(true);
+        return;
       }
 
       // Structural changes: reload the children of expanded nodes that changed.

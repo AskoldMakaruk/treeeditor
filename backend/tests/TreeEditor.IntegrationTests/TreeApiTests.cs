@@ -5,15 +5,11 @@ using TreeEditor.Application.Dtos;
 namespace TreeEditor.IntegrationTests;
 
 [Collection("api")]
-public sealed class TreeApiTests : ApiTestBase
+public sealed class TreeApiTests(TreeEditorApiFixture fixture) : ApiTestBase(fixture)
 {
     private static readonly UpdateOperation[] NoUpdates = [];
     private static readonly AddOperation[] NoAdditions = [];
     private static readonly int[] NoDeletions = [];
-
-    public TreeApiTests(TreeEditorApiFixture fixture) : base(fixture)
-    {
-    }
 
     [Fact]
     public async Task Sample_data_is_at_least_four_levels_deep()
@@ -106,6 +102,28 @@ public sealed class TreeApiTests : ApiTestBase
             [
                 new AddOperation(-1, root.Id, "pending-parent"),
                 new AddOperation(-2, -1, "pending-child"),
+            ],
+            NoDeletions));
+
+        var parent = result.Added.Single(a => a.TempId == -1);
+        var child = result.Added.Single(a => a.TempId == -2);
+
+        var children = await GetChildrenAsync(parent.Id);
+        Assert.Contains(children, c => c.Id == child.Id && c.Value == "pending-child");
+    }
+
+    [Fact]
+    public async Task Apply_supports_child_listed_before_its_pending_parent()
+    {
+        await ResetAsync();
+        var root = await GetRootAsync();
+
+        // The child (-2) references a parent (-1) that appears later in the batch.
+        var result = await ApplyAsync(new ApplyRequest(
+            NoUpdates,
+            [
+                new AddOperation(-2, -1, "pending-child"),
+                new AddOperation(-1, root.Id, "pending-parent"),
             ],
             NoDeletions));
 

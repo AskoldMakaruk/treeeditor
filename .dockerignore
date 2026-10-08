@@ -1,0 +1,10 @@
+.git
+.devenv
+.idea
+**/bin
+**/obj
+**/node_modules
+frontend/dist
+*.user
+plan.md
+README.md

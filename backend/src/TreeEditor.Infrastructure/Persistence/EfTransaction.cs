@@ -3,17 +3,10 @@ using TreeEditor.Application.Interfaces;
 
 namespace TreeEditor.Infrastructure.Persistence;
 
-internal sealed class EfTransaction : ITransaction
+internal sealed class EfTransaction(IDbContextTransaction transaction) : ITransaction
 {
-    private readonly IDbContextTransaction _transaction;
-
-    public EfTransaction(IDbContextTransaction transaction)
-    {
-        _transaction = transaction;
-    }
-
     public Task CommitAsync(CancellationToken cancellationToken) =>
-        _transaction.CommitAsync(cancellationToken);
+        transaction.CommitAsync(cancellationToken);
 
-    public ValueTask DisposeAsync() => _transaction.DisposeAsync();
+    public ValueTask DisposeAsync() => transaction.DisposeAsync();
 }

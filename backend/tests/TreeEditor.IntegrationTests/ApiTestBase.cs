@@ -9,14 +9,9 @@ namespace TreeEditor.IntegrationTests;
 /// tests discover structure dynamically (roots, leaves, branches, deep nodes) instead of relying on
 /// specific ids/values.
 /// </summary>
-public abstract class ApiTestBase
+public abstract class ApiTestBase(TreeEditorApiFixture fixture)
 {
-    protected ApiTestBase(TreeEditorApiFixture fixture)
-    {
-        Fixture = fixture;
-    }
-
-    protected TreeEditorApiFixture Fixture { get; }
+    protected TreeEditorApiFixture Fixture { get; } = fixture;
 
     protected HttpClient Client => Fixture.Client;
 

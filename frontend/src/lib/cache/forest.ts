@@ -26,4 +26,10 @@ export interface CachedElement {
   pendingDelete: boolean;
   /** The server changed this element while a local edit was pending. */
   conflict: boolean;
+  /** The server's value captured when the conflict was detected (null if none). */
+  serverValue: string | null;
+  /** When the server last changed the row (ISO string), captured at conflict detection. */
+  serverUpdatedAt: string | null;
+  /** When the user last changed this element locally (ISO string). */
+  editedAt: string | null;
 }
