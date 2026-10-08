@@ -13,6 +13,8 @@ import { cacheTree } from './cacheTree.svelte';
  *   loaded tree because both the check and the refetch are scoped to the ids this client holds.
  * - Expanded nodes whose version changed also have their children reloaded, so structural changes
  *   (a child added or removed elsewhere) appear without a full reload.
+ * - Ids named in the notification that this client does not hold yet are fetched and added when
+ *   reachable, so a newly created root shows up on every connected client.
  * - If a node changed on the server while a local edit was pending, the local value is kept and
  *   flagged as a conflict instead of being overwritten.
  */
@@ -23,6 +25,7 @@ export class SyncStore {
 
   private connection: HubConnection | null = null;
   private reconciling = false;
+  private pendingChangedIds = new Set<number>();
 
   async start(): Promise<void> {
     if (this.connection) {
@@ -40,9 +43,13 @@ export class SyncStore {
         void this.reloadAfterReset(notification.revision);
         return;
       }
-      if (this.revision === null || notification.revision !== this.revision) {
-        void this.reconcile();
+
+      // The notification names the touched ids. New roots are not in this client's cache, so they
+      // would never be discovered by a version check alone; remember them and fetch after the check.
+      for (const id of notification.changedIds) {
+        this.pendingChangedIds.add(id);
       }
+      void this.reconcile();
     });
     connection.onreconnecting(() => {
       this.connected = false;
@@ -72,6 +79,7 @@ export class SyncStore {
   private async reloadAfterReset(revision: number): Promise<void> {
     this.revision = revision;
     this.error = null;
+    this.pendingChangedIds.clear();
     try {
       await cacheTree.loadRoots(true);
     } catch (error) {
@@ -113,6 +121,7 @@ export class SyncStore {
 
       // Fallback for a missed Reset event: if everything we held is gone, reload from the root.
       if (held.length > 0 && result.nodes.length === 0 && result.deleted.length === held.length) {
+        this.pendingChangedIds.clear();
         await cacheTree.loadRoots(true);
         return;
       }
@@ -123,10 +132,40 @@ export class SyncStore {
           await cacheTree.reloadChildren(id);
         }
       }
+
+      await this.applyPushedNodes();
     } catch (error) {
       this.error = (error as Error).message;
     } finally {
       this.reconciling = false;
+    }
+
+    // A change announced while we were reconciling (or right after we drained) still needs handling.
+    if (this.pendingChangedIds.size > 0) {
+      await this.reconcile();
+    }
+  }
+
+  /**
+   * Fetches ids announced by the server that this client does not hold yet — most importantly a
+   * newly added root, which no version check against the client's own ids could ever discover.
+   */
+  private async applyPushedNodes(): Promise<void> {
+    while (this.pendingChangedIds.size > 0) {
+      const ids = [...this.pendingChangedIds];
+      this.pendingChangedIds.clear();
+
+      for (const id of ids) {
+        if (cacheTree.contains(id)) {
+          continue;
+        }
+
+        try {
+          cacheTree.loadReachable(await api.getElement(id));
+        } catch {
+          // Deleted before we could fetch it; the next check reports it.
+        }
+      }
     }
   }
 }

@@ -132,7 +132,7 @@ public sealed class EfElementRepository(AppDbContext db, TimeProvider clock) : I
             var element = new Element
             {
                 Value = addition.Value,
-                ParentId = addition.ParentId >= 0 ? addition.ParentId : null,
+                ParentId = addition.ParentId is int parentId && parentId >= 0 ? parentId : null,
                 Version = version,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -146,9 +146,9 @@ public sealed class EfElementRepository(AppDbContext db, TimeProvider clock) : I
         // so EF orders the inserts and fills the generated foreign keys in one SaveChanges.
         foreach (var addition in additions)
         {
-            if (addition.ParentId < 0)
+            if (addition.ParentId is int parentId && parentId < 0)
             {
-                byTempId[addition.TempId].Parent = byTempId[addition.ParentId];
+                byTempId[addition.TempId].Parent = byTempId[parentId];
             }
         }
 

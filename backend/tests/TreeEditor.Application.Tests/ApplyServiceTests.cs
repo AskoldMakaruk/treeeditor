@@ -80,6 +80,26 @@ public sealed class ApplyServiceTests
     }
 
     [Fact]
+    public async Task Apply_adds_a_root_element_when_the_tree_is_empty()
+    {
+        var (service, repository, _, notifier) = Build();
+
+        var result = await service.ApplyAsync(
+            new ApplyRequest(NoUpdates, [new AddOperation(-1, null, "new-root")], NoDeletions),
+            default);
+
+        var added = Assert.Single(result.Added);
+        var node = await repository.GetByIdAsync(added.Id, default);
+        Assert.NotNull(node);
+        Assert.Null(node!.ParentId);
+        Assert.Equal("new-root", node.Value);
+
+        // The new root must be announced so other clients can fetch it.
+        var call = Assert.Single(notifier.Calls);
+        Assert.Contains(added.Id, call.ChangedIds);
+    }
+
+    [Fact]
     public async Task Apply_throws_when_a_negative_parent_is_not_in_the_batch()
     {
         var (service, repository, _, _) = Build();

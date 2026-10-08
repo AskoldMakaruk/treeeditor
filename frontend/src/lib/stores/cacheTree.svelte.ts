@@ -256,6 +256,18 @@ export class CacheTreeStore {
     this.schedulePersist();
   }
 
+  /**
+   * Adds a node pushed by another client when it is reachable in this cache: a root, or a child
+   * whose parent is already loaded. Unreachable nodes are skipped and picked up if/when their
+   * parent is expanded later.
+   */
+  loadReachable(node: ElementNode): void {
+    if (node.parentId !== null && !this.contains(node.parentId)) {
+      return;
+    }
+    this.load(node);
+  }
+
   /** Expands a node, loading its children on first expansion; collapses when already open. */
   async toggle(key: number): Promise<void> {
     const element = this.elements.find((candidate) => candidate.key === key);
@@ -355,13 +367,23 @@ export class CacheTreeStore {
       await this.loadChildren(parent.id);
     }
 
+    parent.expanded = true;
+    this.createPending(value, parentKey);
+  }
+
+  /** Adds a pending root element (used to create the first element of an empty tree). */
+  addRoot(value: string): void {
+    this.createPending(value, null);
+  }
+
+  private createPending(value: string, parentId: number | null): void {
     const key = this.nextTempId--;
     this.elements = [
       ...this.elements,
       {
         key,
         id: null,
-        parentId: parentKey,
+        parentId,
         value,
         hasChildren: false,
         expanded: true,
@@ -375,7 +397,6 @@ export class CacheTreeStore {
         editedAt: new Date().toISOString(),
       },
     ];
-    parent.expanded = true;
     this.schedulePersist();
   }
 
@@ -403,7 +424,7 @@ export class CacheTreeStore {
         .map((element) => ({ id: element.id as number, value: element.value })),
       additions: this.elements
         .filter((element) => element.pendingAdd && !element.pendingDelete)
-        .map((element) => ({ tempId: element.key, parentId: element.parentId as number, value: element.value })),
+        .map((element) => ({ tempId: element.key, parentId: element.parentId, value: element.value })),
       deletions: this.deletionRoots(),
     };
 

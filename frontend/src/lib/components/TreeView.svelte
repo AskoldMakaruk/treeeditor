@@ -99,6 +99,14 @@
     <div class="actions">
       <button class="ghost" onclick={() => sync.reconcile()} disabled={cacheTree.busy}>Refresh</button>
       <button
+        class="ghost"
+        onclick={() => cacheTree.addRoot('New element')}
+        disabled={cacheTree.busy}
+        title="Add a new root element"
+      >
+        + element
+      </button>
+      <button
         class="danger"
         class:loading={cacheTree.resetting}
         onclick={onReset}
@@ -137,7 +145,16 @@
     {#if rows.length === 0 && cacheTree.busy}
       <p class="muted">Loading…</p>
     {:else if rows.length === 0}
-      <p class="muted">No elements.</p>
+      <div class="empty">
+        <p class="muted">The tree is empty.</p>
+        <button
+          class="ghost"
+          onclick={() => cacheTree.addRoot('New element')}
+          disabled={cacheTree.busy}
+        >
+          Add element
+        </button>
+      </div>
     {/if}
 
     {#each rows as row (row.element.key)}
@@ -538,5 +555,12 @@
 
   .muted {
     color: var(--muted);
+  }
+
+  .empty {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 4px;
   }
 </style>

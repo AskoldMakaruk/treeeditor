@@ -101,10 +101,12 @@ public sealed class ApplyService(
 
         var tempIds = additions.Select(addition => addition.TempId).ToHashSet();
 
-        // Existing (non-negative) parents must exist; negative ids must refer to another addition.
+        // Existing (non-negative) parents must exist; negative ids must refer to another addition;
+        // a null parent creates a root element and needs no validation.
         var realParentIds = additions
-            .Where(addition => addition.ParentId >= 0)
             .Select(addition => addition.ParentId)
+            .Where(parentId => parentId is >= 0)
+            .Select(parentId => parentId!.Value)
             .Distinct()
             .ToArray();
 
@@ -122,10 +124,10 @@ public sealed class ApplyService(
 
         foreach (var addition in additions)
         {
-            if (addition.ParentId < 0 && !tempIds.Contains(addition.ParentId))
+            if (addition.ParentId is int parentId && parentId < 0 && !tempIds.Contains(parentId))
             {
                 throw new DomainException(
-                    $"Parent {addition.ParentId} of new element {addition.TempId} was not added in the same batch.");
+                    $"Parent {parentId} of new element {addition.TempId} was not added in the same batch.");
             }
         }
 
@@ -142,7 +144,10 @@ public sealed class ApplyService(
         foreach (var addition in additions)
         {
             changedIds.Add(tempToReal[addition.TempId]);
-            touchedParents.Add(addition.ParentId >= 0 ? addition.ParentId : tempToReal[addition.ParentId]);
+            if (addition.ParentId is int parentId)
+            {
+                touchedParents.Add(parentId >= 0 ? parentId : tempToReal[parentId]);
+            }
         }
 
         return (additions.Count, result);

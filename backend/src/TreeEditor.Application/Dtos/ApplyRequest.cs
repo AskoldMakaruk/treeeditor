@@ -2,7 +2,11 @@ namespace TreeEditor.Application.Dtos;
 
 public sealed record UpdateOperation(int Id, string Value);
 
-public sealed record AddOperation(int TempId, int ParentId, string Value);
+/// <summary>
+/// A new element. <see cref="ParentId"/> is a real parent id, a negative temporary id of another
+/// addition in the same batch, or <c>null</c> to create a root element.
+/// </summary>
+public sealed record AddOperation(int TempId, int? ParentId, string Value);
 
 /// <summary>
 /// A batch of pending client-cache changes. Applied atomically: either all operations

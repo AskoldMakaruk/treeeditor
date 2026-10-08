@@ -82,12 +82,16 @@ internal sealed class FakeElementRepository : IElementRepository
             for (var i = pending.Count - 1; i >= 0; i--)
             {
                 var addition = pending[i];
-                int parentId;
-                if (addition.ParentId >= 0)
+                int? parentId;
+                if (addition.ParentId is not int parentRef)
                 {
-                    parentId = addition.ParentId;
+                    parentId = null; // root element
                 }
-                else if (map.TryGetValue(addition.ParentId, out var real))
+                else if (parentRef >= 0)
+                {
+                    parentId = parentRef;
+                }
+                else if (map.TryGetValue(parentRef, out var real))
                 {
                     parentId = real;
                 }

@@ -135,6 +135,26 @@ public sealed class TreeApiTests(TreeEditorApiFixture fixture) : ApiTestBase(fix
     }
 
     [Fact]
+    public async Task Apply_adds_a_root_to_an_empty_tree()
+    {
+        await ResetAsync();
+        var root = await GetRootAsync();
+        await ApplyAsync(new ApplyRequest(NoUpdates, NoAdditions, [root.Id]));
+        Assert.Empty(await GetRootsAsync());
+
+        var result = await ApplyAsync(new ApplyRequest(
+            NoUpdates,
+            [new AddOperation(-1, null, "new-root")],
+            NoDeletions));
+
+        var added = Assert.Single(result.Added);
+        var only = Assert.Single(await GetRootsAsync());
+        Assert.Equal(added.Id, only.Id);
+        Assert.Equal("new-root", only.Value);
+        Assert.Null(only.ParentId);
+    }
+
+    [Fact]
     public async Task Deleting_an_element_cascades_to_descendants()
     {
         await ResetAsync();

@@ -16,7 +16,8 @@ export interface UpdateOperation {
 
 export interface AddOperation {
   tempId: number;
-  parentId: number;
+  /** Real parent id, a negative temporary id, or null to create a root element. */
+  parentId: number | null;
   value: string;
 }
 
