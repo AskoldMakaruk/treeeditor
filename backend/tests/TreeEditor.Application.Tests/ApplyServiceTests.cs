@@ -80,6 +80,38 @@ public sealed class ApplyServiceTests
     }
 
     [Fact]
+    public async Task Apply_announces_the_parent_when_a_child_is_added()
+    {
+        var (service, repository, _, notifier) = Build();
+        repository.Seed(1, "root");
+
+        var result = await service.ApplyAsync(
+            new ApplyRequest(NoUpdates, [new AddOperation(-1, 1, "child")], NoDeletions),
+            default);
+
+        var child = Assert.Single(result.Added);
+        var call = Assert.Single(notifier.Calls);
+        // The parent must be announced so clients showing it update the expand arrow.
+        Assert.Contains(1, call.ChangedIds);
+        Assert.Contains(child.Id, call.ChangedIds);
+    }
+
+    [Fact]
+    public async Task Apply_announces_the_parent_when_a_subtree_is_deleted()
+    {
+        var (service, repository, _, notifier) = Build();
+        repository.Seed(1, "root");
+        repository.Seed(2, "branch", 1);
+        repository.Seed(3, "leaf", 2);
+
+        await service.ApplyAsync(new ApplyRequest(NoUpdates, NoAdditions, [2]), default);
+
+        var call = Assert.Single(notifier.Calls);
+        Assert.Contains(2, call.ChangedIds);
+        Assert.Contains(1, call.ChangedIds);
+    }
+
+    [Fact]
     public async Task Apply_adds_a_root_element_when_the_tree_is_empty()
     {
         var (service, repository, _, notifier) = Build();
@@ -97,6 +129,7 @@ public sealed class ApplyServiceTests
         // The new root must be announced so other clients can fetch it.
         var call = Assert.Single(notifier.Calls);
         Assert.Contains(added.Id, call.ChangedIds);
+        Assert.Contains(added.Id, call.NewRootIds);
     }
 
     [Fact]

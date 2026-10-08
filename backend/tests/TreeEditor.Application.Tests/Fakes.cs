@@ -207,17 +207,22 @@ internal sealed class RecordingLock : IDistributedLock
 
 internal sealed class RecordingNotifier : ITreeChangeNotifier
 {
-    public sealed record Call(long Revision, IReadOnlyList<int> ChangedIds, bool Reset);
+    public sealed record Call(
+        long Revision,
+        IReadOnlyList<int> ChangedIds,
+        IReadOnlyList<int> NewRootIds,
+        bool Reset);
 
     public List<Call> Calls { get; } = [];
 
     public Task NotifyChangedAsync(
         long revision,
         IReadOnlyList<int> changedIds,
+        IReadOnlyList<int> newRootIds,
         bool reset,
         CancellationToken cancellationToken)
     {
-        Calls.Add(new Call(revision, changedIds, reset));
+        Calls.Add(new Call(revision, changedIds, newRootIds, reset));
         return Task.CompletedTask;
     }
 }
