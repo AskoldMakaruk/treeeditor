@@ -1,0 +1,23 @@
+# .NET
+bin/
+obj/
+*.user
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# devenv / direnv
+.devenv/
+.direnv/
+devenv.local.nix
+devenv.local.yaml
+
+# local env
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
