@@ -82,6 +82,7 @@ export class CacheTreeStore {
     }
 
     const result: CachedElement[] = [];
+    const seen = new Set<number>();
     for (const item of raw) {
       if (!item || typeof item !== 'object') {
         continue;
@@ -91,6 +92,11 @@ export class CacheTreeStore {
       if (typeof element.key !== 'number' || typeof element.value !== 'string') {
         continue;
       }
+
+      if (seen.has(element.key)) {
+        continue;
+      }
+      seen.add(element.key);
 
       result.push({
         key: element.key,
@@ -332,6 +338,15 @@ export class CacheTreeStore {
       }
 
       this.loadMany(fresh);
+
+      if (fresh.length === 0) {
+        // No children left: collapse so a later addition does not spring the node open.
+        const parent = this.elements.find((element) => element.key === id);
+        if (parent) {
+          parent.expanded = false;
+          this.schedulePersist();
+        }
+      }
     } catch {
       // best-effort; the next reconcile will retry
     } finally {
@@ -508,6 +523,11 @@ export class CacheTreeStore {
     element.conflict = false;
     element.serverValue = null;
     element.serverUpdatedAt = null;
+    // A node with no children cannot stay open: otherwise a child added later would make it
+    // appear to spring open on its own (it looks collapsed but was still flagged expanded).
+    if (!node.hasChildren) {
+      element.expanded = false;
+    }
     this.schedulePersist();
   }
 
@@ -597,6 +617,16 @@ export class CacheTreeStore {
     for (const item of added) {
       mapping.set(item.tempId, item.id);
     }
+
+    if (mapping.size === 0) {
+      return;
+    }
+
+    // A fetched copy of a just-created node may already sit in the cache under its real id (the
+    // server's own TreeChanged can arrive before the apply response). Drop those copies: the
+    // optimistic element below carries the user's local state and is about to take the real id.
+    const targetIds = new Set(mapping.values());
+    this.elements = this.elements.filter((element) => !targetIds.has(element.key));
 
     for (const element of this.elements) {
       if (mapping.has(element.key)) {

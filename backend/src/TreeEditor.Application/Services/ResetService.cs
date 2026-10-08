@@ -34,7 +34,7 @@ public sealed class ResetService(
 
         await transaction.CommitAsync(cancellationToken);
         await cache.RemoveByPrefixAsync(CacheKeys.TreePrefix, cancellationToken);
-        await notifier.NotifyChangedAsync(revision, [], reset: true, cancellationToken);
+        await notifier.NotifyChangedAsync(revision, [], [], reset: true, cancellationToken);
 
         return revision;
     }

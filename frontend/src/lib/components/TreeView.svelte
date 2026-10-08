@@ -14,6 +14,14 @@
   let rows = $derived(buildRows());
   const pending = $derived(cacheTree.pending);
 
+  // Tell the server which nodes are visible so change events can be scoped to them.
+  $effect(() => {
+    const ids = rows
+      .map((row) => row.element.id)
+      .filter((id): id is number => id !== null);
+    sync.setVisible(ids);
+  });
+
   onMount(() => {
     void cacheTree.bootstrap();
   });

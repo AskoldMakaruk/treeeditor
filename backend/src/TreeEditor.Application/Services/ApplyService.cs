@@ -28,17 +28,21 @@ public sealed class ApplyService(
         var revision = await repository.BumpRevisionAsync(cancellationToken);
         var changedIds = new HashSet<int>();
         var touchedParents = new HashSet<int>();
+        var newRootIds = new HashSet<int>();
 
         var updated = await ApplyUpdatesAsync(request.Updates, revision, changedIds, cancellationToken);
         var (added, additions) = await ApplyAdditionsAsync(
-            request.Additions, revision, changedIds, touchedParents, cancellationToken);
+            request.Additions, revision, changedIds, touchedParents, newRootIds, cancellationToken);
         var deleted = await ApplyDeletionsAsync(
             request.Deletions, revision, changedIds, touchedParents, cancellationToken);
 
-        // Adding/removing a child changes the parent's children-set -> bump its version.
+        // Adding/removing a child changes the parent's children-set -> bump its version. The parent
+        // is part of the delta too, so a client that only has the parent visible is told its
+        // children-set changed (it updates the expand arrow and only loads children if expanded).
         if (touchedParents.Count > 0)
         {
             await repository.TouchManyAsync(touchedParents.ToList(), revision, cancellationToken);
+            changedIds.UnionWith(touchedParents);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -47,7 +51,7 @@ public sealed class ApplyService(
         await cache.RemoveByPrefixAsync(CacheKeys.TreePrefix, cancellationToken);
 
         var changed = changedIds.ToList();
-        await notifier.NotifyChangedAsync(revision, changed, reset: false, cancellationToken);
+        await notifier.NotifyChangedAsync(revision, changed, newRootIds.ToList(), reset: false, cancellationToken);
 
         return new ApplyResult(updated, added, deleted, additions, revision);
     }
@@ -92,6 +96,7 @@ public sealed class ApplyService(
         long revision,
         HashSet<int> changedIds,
         HashSet<int> touchedParents,
+        HashSet<int> newRootIds,
         CancellationToken cancellationToken)
     {
         if (additions.Count == 0)
@@ -143,8 +148,14 @@ public sealed class ApplyService(
 
         foreach (var addition in additions)
         {
-            changedIds.Add(tempToReal[addition.TempId]);
-            if (addition.ParentId is int parentId)
+            var newId = tempToReal[addition.TempId];
+            changedIds.Add(newId);
+
+            if (addition.ParentId is null)
+            {
+                newRootIds.Add(newId);
+            }
+            else if (addition.ParentId is int parentId)
             {
                 touchedParents.Add(parentId >= 0 ? parentId : tempToReal[parentId]);
             }

@@ -22,6 +22,9 @@ if (redisEnabled && !string.IsNullOrWhiteSpace(redisConfiguration))
     });
 }
 
+// Per-connection visible-node tracking; used to scope change notifications.
+builder.Services.AddSingleton<TreeVisibilityTracker>();
+
 // Overrides the no-op registered by AddInfrastructure.
 builder.Services.AddSingleton<ITreeChangeNotifier, SignalRTreeChangeNotifier>();
 

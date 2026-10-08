@@ -16,9 +16,14 @@ public interface ISyncService
 /// </summary>
 public interface ITreeChangeNotifier
 {
+    /// <param name="newRootIds">
+    /// Ids of roots created by this change. They are delivered to every client because the top
+    /// level is always visible, even though a client cannot have them in its visible set yet.
+    /// </param>
     Task NotifyChangedAsync(
         long revision,
         IReadOnlyList<int> changedIds,
+        IReadOnlyList<int> newRootIds,
         bool reset,
         CancellationToken cancellationToken);
 }
@@ -29,6 +34,7 @@ public sealed class NullTreeChangeNotifier : ITreeChangeNotifier
     public Task NotifyChangedAsync(
         long revision,
         IReadOnlyList<int> changedIds,
+        IReadOnlyList<int> newRootIds,
         bool reset,
         CancellationToken cancellationToken)
         => Task.CompletedTask;

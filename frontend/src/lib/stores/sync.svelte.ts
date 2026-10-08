@@ -1,4 +1,9 @@
-import { HubConnectionBuilder, type HubConnection, LogLevel } from '@microsoft/signalr';
+import {
+  HubConnectionBuilder,
+  type HubConnection,
+  HubConnectionState,
+  LogLevel,
+} from '@microsoft/signalr';
 import { API_BASE, api } from '../api';
 import type { TreeChangedNotification } from '../types';
 import { cacheTree } from './cacheTree.svelte';
@@ -26,6 +31,7 @@ export class SyncStore {
   private connection: HubConnection | null = null;
   private reconciling = false;
   private pendingChangedIds = new Set<number>();
+  private visibleIds: number[] = [];
 
   async start(): Promise<void> {
     if (this.connection) {
@@ -57,6 +63,7 @@ export class SyncStore {
     connection.onreconnected(() => {
       this.connected = true;
       void this.reconcile();
+      void this.pushVisibility();
     });
     connection.onclose(() => {
       this.connected = false;
@@ -69,6 +76,7 @@ export class SyncStore {
       this.connected = true;
       this.error = null;
       await this.reconcile();
+      await this.pushVisibility();
     } catch (error) {
       this.connected = false;
       this.error = (error as Error).message;
@@ -84,6 +92,35 @@ export class SyncStore {
       await cacheTree.loadRoots(true);
     } catch (error) {
       this.error = (error as Error).message;
+    }
+  }
+
+  /**
+   * Reports the nodes currently visible in this UI session. The server scopes change events to
+   * these ids, so a client is only told about things it can actually see.
+   */
+  setVisible(ids: number[]): void {
+    const unique = [...new Set(ids)].sort((a, b) => a - b);
+    if (
+      unique.length === this.visibleIds.length &&
+      unique.every((id, index) => id === this.visibleIds[index])
+    ) {
+      return;
+    }
+
+    this.visibleIds = unique;
+    void this.pushVisibility();
+  }
+
+  private async pushVisibility(): Promise<void> {
+    if (!this.connection || this.connection.state !== HubConnectionState.Connected) {
+      return;
+    }
+
+    try {
+      await this.connection.invoke('SetVisible', this.visibleIds);
+    } catch {
+      // Best-effort; visibility is re-sent after the next (re)connect.
     }
   }
 
